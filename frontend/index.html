@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Packet Dashboard</title>
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Socket.io -->
+  <script src="http://localhost:3000/socket.io/socket.io.js"></script>
+</head>
+
+<body class="bg-gray-900 text-white p-6">
+
+  <h1 class="text-3xl font-bold mb-6">📡 Packet Dashboard</h1>
+
+  <!-- 🔹 Summary Cards -->
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <div class="bg-gray-800 p-4 rounded">
+      <h2>Total Packets</h2>
+      <p id="totalPackets" class="text-2xl">0</p>
+    </div>
+    <div class="bg-green-700 p-4 rounded">
+      <h2>Encrypted</h2>
+      <p id="encryptedPackets" class="text-2xl">0</p>
+    </div>
+    <div class="bg-red-700 p-4 rounded">
+      <h2>Unencrypted</h2>
+      <p id="unencryptedPackets" class="text-2xl">0</p>
+    </div>
+  </div>
+
+  <!-- 🔹 Charts -->
+  <div class="grid grid-cols-3 gap-4 mb-6">
+    <canvas id="lineChart"></canvas>
+    <canvas id="pieChart"></canvas>
+    <canvas id="barChart"></canvas>
+  </div>
+
+  <!-- 🔹 Table -->
+  <div class="bg-gray-800 p-4 rounded">
+    <h2 class="mb-2">Recent Packets</h2>
+    <table class="w-full text-sm">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Source</th>
+          <th>Destination</th>
+          <th>Protocol</th>
+          <th>Encrypted</th>
+        </tr>
+      </thead>
+      <tbody id="packetTable"></tbody>
+    </table>
+  </div>
+
+<script>
+const socket = io("http://localhost:3000");
+
+// 🔹 State
+let total = 0;
+let encrypted = 0;
+let unencrypted = 0;
+let packetsPerSecond = [];
+let labels = [];
+let protocolCount = {
+  TCP: 0,
+  UDP: 0,
+  HTTP: 0,
+  HTTPS: 0
+};
+let packetList = [];
+
+// 🔹 Charts Setup
+const lineChart = new Chart(document.getElementById("lineChart"), {
+  type: "line",
+  data: {
+    labels: labels,
+    datasets: [{
+      label: "Packets/sec",
+      data: packetsPerSecond,
+      borderColor: "cyan"
+    }]
+  }
+});
+
+const pieChart = new Chart(document.getElementById("pieChart"), {
+  type: "pie",
+  data: {
+    labels: ["Encrypted", "Unencrypted"],
+    datasets: [{
+      data: [0, 0],
+      backgroundColor: ["green", "red"]
+    }]
+  }
+});
+
+const barChart = new Chart(document.getElementById("barChart"), {
+  type: "bar",
+  data: {
+    labels: ["TCP", "UDP", "HTTP", "HTTPS"],
+    datasets: [{
+      label: "Protocols",
+      data: [0, 0, 0, 0],
+      backgroundColor: "orange"
+    }]
+  }
+});
+
+// 🔹 Functions
+function updateSummary() {
+  document.getElementById("totalPackets").innerText = total;
+  document.getElementById("encryptedPackets").innerText = encrypted;
+  document.getElementById("unencryptedPackets").innerText = unencrypted;
+}
+
+function updateLineChart() {
+  const now = new Date().toLocaleTimeString();
+  labels.push(now);
+  packetsPerSecond.push(1);
+
+  if (labels.length > 10) {
+    labels.shift();
+    packetsPerSecond.shift();
+  }
+
+  lineChart.update();
+}
+
+function updatePieChart() {
+  pieChart.data.datasets[0].data = [encrypted, unencrypted];
+  pieChart.update();
+}
+
+function updateBarChart() {
+  barChart.data.datasets[0].data = [
+    protocolCount.TCP,
+    protocolCount.UDP,
+    protocolCount.HTTP,
+    protocolCount.HTTPS
+  ];
+  barChart.update();
+}
+
+function updateTable(packet) {
+  packetList.unshift(packet);
+  if (packetList.length > 15) packetList.pop();
+
+  const table = document.getElementById("packetTable");
+  table.innerHTML = "";
+
+  packetList.forEach(p => {
+    const row = `
+      <tr>
+        <td>${p.time}</td>
+        <td>${p.srcIP}</td>
+        <td>${p.dstIP}</td>
+        <td>${p.protocol}</td>
+        <td>${p.encrypted ? "Yes" : "No"}</td>
+      </tr>
+    `;
+    table.innerHTML += row;
+  });
+}
+
+// 🔹 Receive Packet
+socket.on("packet", (packet) => {
+  total++;
+
+  if (packet.encrypted) encrypted++;
+  else unencrypted++;
+
+  if (protocolCount[packet.protocol] !== undefined) {
+    protocolCount[packet.protocol]++;
+  }
+
+  updateSummary();
+  updateLineChart();
+  updatePieChart();
+  updateBarChart();
+  updateTable(packet);
+});
+</script>
+
+</body>
+</html>
