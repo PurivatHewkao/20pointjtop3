@@ -28,7 +28,9 @@ const io = initSocket(server);
 socketHandler(io, packetCapture);
 
 const PORT = 3000;
-server.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`🔐 Auth API ready at http://localhost:${PORT}/api`);
+// 🟢 แก้ไข: เพิ่ม '0.0.0.0' เพื่อเปิดรับ Connection จากทุก IP ในวง LAN (ไม่ใช่แค่ localhost)
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🔐 Auth API ready at /api`);
+  console.log(`🌐 หากต้องการใช้งานจากเครื่องอื่น ให้เข้าผ่าน http://10.99.156.237:${PORT}`);
 });

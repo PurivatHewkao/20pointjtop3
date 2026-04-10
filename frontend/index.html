@@ -1028,6 +1028,37 @@
     justify-content: flex-end;
     flex-shrink: 0;
   }
+
+  /* ── User Profile Badge ── */
+  .user-profile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 5px 12px 5px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-right: 8px;
+  }
+
+  .role-badge {
+    background: var(--blue-100);
+    color: var(--blue-800);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .role-admin {
+    background: #fee2e2;
+    color: #b91c1c;
+  }
 </style>
 
 <div class="dash">
@@ -1088,6 +1119,12 @@
       <span class="badge-live"><span class="dot"></span>LIVE</span>
     </div>
     <div class="topbar-right">
+      <div class="user-profile">
+        <i data-lucide="user" style="width:14px;height:14px;"></i>
+        <span id="display-username">Guest</span>
+        <span class="role-badge" id="display-role">USER</span>
+      </div>
+
       <span class="badge-iface">eth0</span>
       <span id="clock"></span>
       <button class="btn-stop" onclick="toggleCapture(this)">หยุดดักจับ</button>
@@ -1234,6 +1271,17 @@
 
   if (!sessionUser || sessionUser === "") {
     window.location.href = 'login.html';
+  }
+
+  // 🟢 นำข้อมูลมาแสดงบน Topbar
+  document.getElementById('display-username').textContent = sessionUser;
+  const roleBadge = document.getElementById('display-role');
+  roleBadge.textContent = sessionRole;
+  if (sessionRole === 'admin') roleBadge.classList.add('role-admin'); // ถ้าเป็นแอดมินให้ป้ายเป็นสีแดง
+
+  const topbarLogo = document.querySelector('.logo');
+  if (topbarLogo) {
+    topbarLogo.innerHTML = `Packet Viz <span style="font-size:12px; color:var(--blue-400);">[${sessionRole.toUpperCase()}: ${sessionUser}]</span>`;
   }
 
   // ปิดช่อง input ไม่ให้แก้ได้ถ้าเป็นแค่ user

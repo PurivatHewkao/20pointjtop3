@@ -1,5 +1,5 @@
-// script.js
-const API_URL = 'http://localhost:3000/api';
+// login.js
+const API_URL = '/api'; // 🟢 แก้ไข: ใช้ Relative Path เพื่อให้รองรับการเข้าผ่าน IP Address ไม่ว่าจะเปิดจากเครื่องไหน
 
 // ฟังก์ชันสลับหน้าต่าง (Tabs)
 function switchTab(tabId) {
@@ -95,5 +95,5 @@ async function handleAuth(event, action, loginType = null) {
     } catch (error) {
         showPopup('error', 'ข้อผิดพลาด', 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ค่ะ');
         console.error(error);
-    }
+    }โ
 }
