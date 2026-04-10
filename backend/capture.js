@@ -1,5 +1,5 @@
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 
 let tshark = null;
 let capturing = false;
@@ -17,21 +17,6 @@ let packetId = 0;
 const ENCRYPTED_PORTS = new Set([443, 8443, 465, 993, 995, 587]);
 const SSH_PORTS = new Set([22]);
 
-function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-
-  for (let name in interfaces) {
-    for (let iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-}
-
-const myIP = getLocalIP();
-console.log('My IP:', myIP);
-
 function toPort(value) {
   const p = parseInt(value, 10);
   return Number.isNaN(p) ? null : p;
@@ -41,48 +26,31 @@ function isEncryptedPort(srcPort, dstPort) {
   const src = toPort(srcPort);
   const dst = toPort(dstPort);
   return (src && (ENCRYPTED_PORTS.has(src) || SSH_PORTS.has(src))) ||
-         (dst && (ENCRYPTED_PORTS.has(dst) || SSH_PORTS.has(dst)));
+    (dst && (ENCRYPTED_PORTS.has(dst) || SSH_PORTS.has(dst)));
 }
 
 function normalizeProtocol(proto, srcPort, dstPort, tlsVer) {
   const p = proto ? proto.toUpperCase() : '';
   const src = toPort(srcPort);
   const dst = toPort(dstPort);
-
-  // 🔐 TLS จริง (แม่นสุด)
   if (tlsVer && tlsVer !== '') return 'HTTPS';
-
-  // 🔐 HTTPS port
   if (src === 443 || dst === 443) return 'HTTPS';
-
-  // 🔐 SSH
   if (src === 22 || dst === 22) return 'SSH';
-
-  // 🌐 DNS
   if (p.includes('DNS')) return 'DNS';
-
-  // 🌐 HTTP
   if (src === 80 || dst === 80) return 'HTTP';
-
-  // 🧠 protocol จาก tshark
   if (p.includes('HTTP')) return 'HTTP';
   if (p.includes('UDP')) return 'UDP';
   if (p.includes('ICMP')) return 'ICMP';
-
-  // TCP fallback
   if (p.includes('TCP')) return 'TCP';
-
   return 'OTHER';
 }
 
 function isEncrypted(proto, srcPort, dstPort, tlsVer) {
   const src = toPort(srcPort);
   const dst = toPort(dstPort);
-
   if (tlsVer && tlsVer !== '') return true;
   if (src === 443 || dst === 443) return true;
   if (src === 22 || dst === 22) return true;
-
   return false;
 }
 
@@ -128,14 +96,11 @@ function resetStats() {
 
 function emitPacket(io, pkt) {
   if (!pkt || !io) return;
-
   stats.total += 1;
   if (pkt.encrypted) stats.encrypted += 1;
   else stats.unencrypted += 1;
-
   if (stats.protocols[pkt.protocol] !== undefined) stats.protocols[pkt.protocol] += 1;
   else stats.protocols.OTHER += 1;
-
   io.emit('packet', pkt);
   if (stats.total % 50 === 0) emitStats(io);
 }
@@ -143,11 +108,11 @@ function emitPacket(io, pkt) {
 function parseLine(line) {
   const [src, dst, tcpSrc, tcpDst, udpSrc, udpDst, proto, tlsVer, len] = line.split('\t');
   if (!src || !dst) return null;
-
   const srcPort = tcpSrc || udpSrc || '-';
   const dstPort = tcpDst || udpDst || '-';
   const protocol = normalizeProtocol(proto, srcPort, dstPort, tlsVer);
-  const encrypted = isEncrypted(proto, srcPort, dstPort, tlsVer);  const tlsVersion = tlsVersionFromProto(proto, srcPort, dstPort);
+  const encrypted = isEncrypted(proto, srcPort, dstPort, tlsVer);
+  const tlsVersion = tlsVersionFromProto(proto, srcPort, dstPort);
   const size = parseInt(len, 10) || 0;
 
   return {
@@ -165,37 +130,9 @@ function parseLine(line) {
   };
 }
 
-// 🔹 หา IP เครื่อง
-function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-
-  for (let name in interfaces) {
-    for (let iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return null;
-}
-
 function startTshark(io, iface = '5', filter = '') {
   const tsharkPath = 'C:\\Program Files\\Wireshark\\tshark.exe';
 
-  // 🔥 auto filter - validate and auto-correct invalid filters
-  if (!filter || filter.trim() === 'ip') {
-    const myIP = getLocalIP();
-
-    if (myIP) {
-      console.log('✅ Using IP filter:', myIP);
-      filter = `host ${myIP}`;
-    } else {
-      console.warn('⚠️ Cannot detect local IP');
-      filter = '';
-    }
-  }
-
-  // รองรับหลาย interface คั่นด้วย comma เช่น '5,6,7'
   const ifaceList = String(iface).split(',').map(s => s.trim()).filter(Boolean);
   const ifaceArgs = ifaceList.flatMap(i => ['-i', i]);
   console.log('📡 Capturing on interfaces:', ifaceList.join(', '));
@@ -215,15 +152,17 @@ function startTshark(io, iface = '5', filter = '') {
     '-e', 'frame.len'
   ];
 
-  if (filter) {
+  // 🔹 ใช้ Filter ตามที่ Server ส่งมาตรงๆ ไม่ออโต้หา IP เองแล้ว
+  if (filter && filter.trim() !== '') {
     args.unshift('-f', filter);
-    console.log(`🔍 Filter: "${filter}"`);
+    console.log(`🔍 Filter Applied: "${filter}"`);
+  } else {
+    console.log(`🔍 No filter applied. Capturing all traffic (Admin mode).`);
   }
 
   console.log('🚀 Running tshark command:', tsharkPath, args.join(' '));
 
   tshark = spawn(tsharkPath, args, { windowsHide: true });
-
   let leftover = '';
 
   tshark.stdout.on('data', (data) => {
@@ -233,7 +172,6 @@ function startTshark(io, iface = '5', filter = '') {
 
     lines.forEach((line) => {
       if (!line.trim()) return;
-
       const pkt = parseLine(line);
       if (pkt) emitPacket(io, pkt);
     });
@@ -241,18 +179,11 @@ function startTshark(io, iface = '5', filter = '') {
 
   tshark.stderr.on('data', (err) => {
     const errMsg = err.toString().trim();
-    console.error('❌ [tshark stderr]', errMsg);
     if (io) io.emit('error', { message: errMsg });
   });
 
   tshark.on('exit', (code, signal) => {
     capturing = false;
-    if (code !== 0 && code !== null) {
-      console.error(`❌ tshark exited with ERROR code=${code} signal=${signal}`);
-      if (io) io.emit('error', { message: `Capture failed: tshark exited with code ${code}` });
-    } else {
-      console.log(`⏹ tshark exited code=${code} signal=${signal}`);
-    }
     if (io) io.emit('capture:status', { capturing: false });
   });
 
@@ -268,20 +199,14 @@ function startTshark(io, iface = '5', filter = '') {
   }
 }
 
-const { exec } = require('child_process');
-
 function stopTshark() {
   capturing = false;
-
   if (tshark) {
     console.log('🔪 Killing tshark process...');
     tshark.kill('SIGTERM');
     tshark = null;
   }
-
-  // Fallback: kill all tshark processes
-  exec('taskkill /IM tshark.exe /F 2>nul', () => {});
-
+  exec('taskkill /IM tshark.exe /F 2>nul', () => { });
   if (statsTimer) {
     clearInterval(statsTimer);
     statsTimer = null;
@@ -291,9 +216,7 @@ function stopTshark() {
 module.exports = {
   start(iface = '5', filter = '', io) {
     if (capturing) {
-      console.warn('⚠️ Capture already running, stopping first...');
       stopTshark();
-      // Give tshark time to fully exit before restarting
       setTimeout(() => {
         resetStats();
         startTshark(io, iface, filter);
@@ -303,11 +226,7 @@ module.exports = {
       startTshark(io, iface, filter);
     }
   },
-
-  stop() {
-    stopTshark();
-  },
-
+  stop: stopTshark,
   isCapturing: () => capturing,
   getInterface: () => currentIface,
   getStats: () => ({ ...stats })
