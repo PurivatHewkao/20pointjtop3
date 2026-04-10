@@ -1,5 +1,10 @@
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// เซฟเป็นไฟล์นามสกุล .jsonl (JSON Lines) เพื่อให้เขียนต่อท้ายได้อย่างรวดเร็ว
+const DATA_FILE = path.join(__dirname, 'packet_log.jsonl');
 
 let tshark = null;
 let capturing = false;
@@ -17,9 +22,29 @@ let packetId = 0;
 const ENCRYPTED_PORTS = new Set([443, 8443, 465, 993, 995, 587]);
 const SSH_PORTS = new Set([22]);
 
+// --- ระบบ Buffer เพื่อเขียนลงไฟล์ ---
+let packetBuffer = [];
+const BATCH_SIZE = 50; 
+
+function savePacketsToFile(newPackets) {
+  if (newPackets.length === 0) return;
+
+  try {
+    // แปลงแต่ละ Object ให้เป็น String 1 บรรทัด แล้วเอามาต่อกัน
+    const lines = newPackets.map(p => JSON.stringify(p)).join('\n') + '\n';
+    
+    // ใช้ fs.appendFile (แบบ Asynchronous) เพื่อเขียนต่อท้ายไฟล์ โดยไม่ทำให้โปรแกรมหลักค้าง
+    fs.appendFile(DATA_FILE, lines, (err) => {
+      if (err) console.error('❌ File Append Error:', err);
+    });
+  } catch (err) {
+    console.error('❌ Error processing file data:', err);
+  }
+}
+// ---------------------------------
+
 function getLocalIP() {
   const interfaces = os.networkInterfaces();
-
   for (let name in interfaces) {
     for (let iface of interfaces[name]) {
       if (iface.family === 'IPv4' && !iface.internal) {
@@ -27,6 +52,7 @@ function getLocalIP() {
       }
     }
   }
+  return null;
 }
 
 const myIP = getLocalIP();
@@ -49,40 +75,24 @@ function normalizeProtocol(proto, srcPort, dstPort, tlsVer) {
   const src = toPort(srcPort);
   const dst = toPort(dstPort);
 
-  // 🔐 TLS จริง (แม่นสุด)
   if (tlsVer && tlsVer !== '') return 'HTTPS';
-
-  // 🔐 HTTPS port
   if (src === 443 || dst === 443) return 'HTTPS';
-
-  // 🔐 SSH
   if (src === 22 || dst === 22) return 'SSH';
-
-  // 🌐 DNS
   if (p.includes('DNS')) return 'DNS';
-
-  // 🌐 HTTP
   if (src === 80 || dst === 80) return 'HTTP';
-
-  // 🧠 protocol จาก tshark
   if (p.includes('HTTP')) return 'HTTP';
   if (p.includes('UDP')) return 'UDP';
   if (p.includes('ICMP')) return 'ICMP';
-
-  // TCP fallback
   if (p.includes('TCP')) return 'TCP';
-
   return 'OTHER';
 }
 
 function isEncrypted(proto, srcPort, dstPort, tlsVer) {
   const src = toPort(srcPort);
   const dst = toPort(dstPort);
-
   if (tlsVer && tlsVer !== '') return true;
   if (src === 443 || dst === 443) return true;
   if (src === 22 || dst === 22) return true;
-
   return false;
 }
 
@@ -117,9 +127,7 @@ function emitStats(io) {
 
 function resetStats() {
   stats = {
-    total: 0,
-    encrypted: 0,
-    unencrypted: 0,
+    total: 0, encrypted: 0, unencrypted: 0,
     protocols: { HTTPS: 0, HTTP: 0, DNS: 0, SSH: 0, TCP: 0, UDP: 0, ICMP: 0, OTHER: 0 },
     startTime: Date.now()
   };
@@ -138,6 +146,16 @@ function emitPacket(io, pkt) {
 
   io.emit('packet', pkt);
   if (stats.total % 50 === 0) emitStats(io);
+
+  // นำข้อมูลเข้า Buffer เตรียมเซฟลงไฟล์
+  packetBuffer.push(pkt);
+
+  // ถ้ายอดถึง 50 แพ็กเก็ต ให้เขียนลงไฟล์
+  if (packetBuffer.length >= BATCH_SIZE) {
+    const dataToSave = [...packetBuffer];
+    packetBuffer = []; 
+    savePacketsToFile(dataToSave);
+  }
 }
 
 function parseLine(line) {
@@ -147,7 +165,8 @@ function parseLine(line) {
   const srcPort = tcpSrc || udpSrc || '-';
   const dstPort = tcpDst || udpDst || '-';
   const protocol = normalizeProtocol(proto, srcPort, dstPort, tlsVer);
-  const encrypted = isEncrypted(proto, srcPort, dstPort, tlsVer);  const tlsVersion = tlsVersionFromProto(proto, srcPort, dstPort);
+  const encrypted = isEncrypted(proto, srcPort, dstPort, tlsVer);  
+  const tlsVersion = tlsVersionFromProto(proto, srcPort, dstPort);
   const size = parseInt(len, 10) || 0;
 
   return {
@@ -165,65 +184,34 @@ function parseLine(line) {
   };
 }
 
-// 🔹 หา IP เครื่อง
-function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-
-  for (let name in interfaces) {
-    for (let iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return null;
-}
-
 function startTshark(io, iface = '5', filter = '') {
   const tsharkPath = 'C:\\Program Files\\Wireshark\\tshark.exe';
 
-  // 🔥 auto filter - validate and auto-correct invalid filters
   if (!filter || filter.trim() === 'ip') {
     const myIP = getLocalIP();
-
     if (myIP) {
       console.log('✅ Using IP filter:', myIP);
       filter = `host ${myIP}`;
     } else {
-      console.warn('⚠️ Cannot detect local IP');
       filter = '';
     }
   }
 
-  // รองรับหลาย interface คั่นด้วย comma เช่น '5,6,7'
   const ifaceList = String(iface).split(',').map(s => s.trim()).filter(Boolean);
   const ifaceArgs = ifaceList.flatMap(i => ['-i', i]);
-  console.log('📡 Capturing on interfaces:', ifaceList.join(', '));
 
   const args = [
-    ...ifaceArgs,
-    '-l',
-    '-T', 'fields',
-    '-e', 'ip.src',
-    '-e', 'ip.dst',
-    '-e', 'tcp.srcport',
-    '-e', 'tcp.dstport',
-    '-e', 'udp.srcport',
-    '-e', 'udp.dstport',
-    '-e', '_ws.col.Protocol',
-    '-e', 'tls.record.version',
-    '-e', 'frame.len'
+    ...ifaceArgs, '-l', '-T', 'fields',
+    '-e', 'ip.src', '-e', 'ip.dst', '-e', 'tcp.srcport', '-e', 'tcp.dstport',
+    '-e', 'udp.srcport', '-e', 'udp.dstport', '-e', '_ws.col.Protocol',
+    '-e', 'tls.record.version', '-e', 'frame.len'
   ];
 
-  if (filter) {
-    args.unshift('-f', filter);
-    console.log(`🔍 Filter: "${filter}"`);
-  }
+  if (filter) args.unshift('-f', filter);
 
-  console.log('🚀 Running tshark command:', tsharkPath, args.join(' '));
+  console.log('🚀 Running tshark:', tsharkPath, args.join(' '));
 
   tshark = spawn(tsharkPath, args, { windowsHide: true });
-
   let leftover = '';
 
   tshark.stdout.on('data', (data) => {
@@ -233,26 +221,18 @@ function startTshark(io, iface = '5', filter = '') {
 
     lines.forEach((line) => {
       if (!line.trim()) return;
-
       const pkt = parseLine(line);
       if (pkt) emitPacket(io, pkt);
     });
   });
 
   tshark.stderr.on('data', (err) => {
-    const errMsg = err.toString().trim();
-    console.error('❌ [tshark stderr]', errMsg);
-    if (io) io.emit('error', { message: errMsg });
+    console.error('❌ [tshark stderr]', err.toString().trim());
   });
 
-  tshark.on('exit', (code, signal) => {
+  tshark.on('exit', (code) => {
     capturing = false;
-    if (code !== 0 && code !== null) {
-      console.error(`❌ tshark exited with ERROR code=${code} signal=${signal}`);
-      if (io) io.emit('error', { message: `Capture failed: tshark exited with code ${code}` });
-    } else {
-      console.log(`⏹ tshark exited code=${code} signal=${signal}`);
-    }
+    console.log(`⏹ tshark exited code=${code}`);
     if (io) io.emit('capture:status', { capturing: false });
   });
 
@@ -268,8 +248,6 @@ function startTshark(io, iface = '5', filter = '') {
   }
 }
 
-const { exec } = require('child_process');
-
 function stopTshark() {
   capturing = false;
 
@@ -278,36 +256,32 @@ function stopTshark() {
     tshark.kill('SIGTERM');
     tshark = null;
   }
-
-  // Fallback: kill all tshark processes
   exec('taskkill /IM tshark.exe /F 2>nul', () => {});
 
   if (statsTimer) {
     clearInterval(statsTimer);
     statsTimer = null;
   }
+
+  // เซฟแพ็กเก็ตที่ค้างอยู่ก่อนปิด
+  if (packetBuffer.length > 0) {
+    savePacketsToFile([...packetBuffer]);
+    packetBuffer = [];
+    console.log('💾 เซฟแพ็กเก็ตสุดท้ายลงไฟล์สำเร็จ');
+  }
 }
 
 module.exports = {
   start(iface = '5', filter = '', io) {
     if (capturing) {
-      console.warn('⚠️ Capture already running, stopping first...');
       stopTshark();
-      // Give tshark time to fully exit before restarting
-      setTimeout(() => {
-        resetStats();
-        startTshark(io, iface, filter);
-      }, 500);
+      setTimeout(() => { resetStats(); startTshark(io, iface, filter); }, 500);
     } else {
       resetStats();
       startTshark(io, iface, filter);
     }
   },
-
-  stop() {
-    stopTshark();
-  },
-
+  stop() { stopTshark(); },
   isCapturing: () => capturing,
   getInterface: () => currentIface,
   getStats: () => ({ ...stats })
