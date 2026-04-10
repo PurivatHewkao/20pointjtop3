@@ -1,101 +1,96 @@
-/**
- * socketHandler.js — Socket.io Event Handler
- */
-
+// socketHandler.js
 module.exports = function socketHandler(io, packetCapture) {
-  let connectionCount = 0;
+
+  // 🟢 ฟังก์ชันจัดการ Packet และอัปเดตสถิติรายบุคคล
+  const handleData = (pkt) => {
+    io.sockets.sockets.forEach((socket) => {
+      if (!socket.isCapturingData) return;
+
+      let canSee = false;
+      // 1. Admin เห็นทราฟฟิกทุกคน (Global) | 2. User เห็นทราฟฟิกที่มี IP ตัวเองเกี่ยวข้อง
+      if (socket.role === 'admin' || pkt.srcIP === socket.clientIP || pkt.dstIP === socket.clientIP) {
+        canSee = true;
+      }
+
+      if (canSee) {
+        // ส่งแพ็กเก็ตไปที่หน้าเว็บ
+        socket.emit('packet', pkt);
+
+        // 🟢 อัปเดตสถิติส่วนตัว (เพื่อให้ Dashboard/Graph ในหน้าเว็บทำงาน)
+        socket.uStats.total++;
+        if (pkt.encrypted) socket.uStats.encrypted++;
+        else socket.uStats.unencrypted++;
+
+        const p = pkt.protocol;
+        if (socket.uStats.protocols[p] !== undefined) socket.uStats.protocols[p]++;
+        else socket.uStats.protocols['OTHER']++;
+      }
+    });
+  };
 
   io.on('connection', (socket) => {
-    connectionCount++;
-
-    // 🔹 1. ดึง IP จริงของ Client ที่เชื่อมต่อเข้ามา
+    // ระบุ IP Client
     let rawIp = socket.handshake.address;
-    // แปลงรูปแบบ IPv6-mapped IPv4 ให้กลายเป็น IPv4 ปกติ (เช่น ::ffff:192.168.1.5 -> 192.168.1.5)
     let clientIP = rawIp.includes('::ffff:') ? rawIp.split('::ffff:')[1] : rawIp;
-    if (clientIP === '::1') clientIP = '127.0.0.1'; // กรณีรันบนเครื่องตัวเอง
+    if (clientIP === '::1') clientIP = '127.0.0.1';
 
-    let clientRole = 'user'; // กำหนดค่าเริ่มต้นเป็น user
-    let clientUsername = 'guest';
+    socket.clientIP = clientIP;
+    socket.isCapturingData = false;
+    socket.role = 'user';
 
-    console.log(`🔌 Client เชื่อมต่อ: ${socket.id} (IP: ${clientIP}) — รวม ${connectionCount} connections`);
+    // 🟢 เตรียมตัวแปรสถิติให้ Dashboard (ต้องมีโครงสร้างตามโค้ดดั้งเดิมของคุณ)
+    socket.uStats = {
+      total: 0, encrypted: 0, unencrypted: 0, encryptedPct: 0,
+      protocols: { HTTPS: 0, HTTP: 0, DNS: 0, SSH: 0, TCP: 0, UDP: 0, ICMP: 0, OTHER: 0 },
+      _lastTotal: 0, pps: 0
+    };
 
-    socket.emit('connected', {
-      message: 'เชื่อมต่อ WebSocket สำเร็จ',
-      socketId: socket.id,
-      serverTime: new Date().toISOString(),
-      capturing: packetCapture.isCapturing(),
-      interface: packetCapture.getInterface()
-    });
-
-    socket.emit('stats', buildStats(packetCapture));
-
-    // 🔹 2. รับข้อมูล Auth จากหน้าเว็บ เพื่อบันทึกว่า Socket นี้คือใคร สิทธิ์อะไร
     socket.on('auth', (data) => {
-      clientRole = data.role || 'user';
-      clientUsername = data.username || 'guest';
-      console.log(`🔐 Socket ${socket.id} ยืนยันตัวตนเป็น [${clientRole.toUpperCase()}] ผู้ใช้: ${clientUsername}`);
+      socket.role = data.role || 'user';
+      socket.username = data.username || 'guest';
+      console.log(`🔐 Logged in: ${socket.username} (${socket.role}) from ${socket.clientIP}`);
     });
 
-    // 🔹 3. จัดการตอนกดปุ่ม เริ่มดักจับ
-    socket.on('capture:start', ({ iface = '6,7,8,10', filter = '' } = {}) => {
-      let finalFilter = filter;
+    socket.on('capture:start', ({ iface = '5' } = {}) => {
+      socket.isCapturingData = true;
+      // รีเซ็ตสถิติเมื่อกดเริ่มใหม่
+      socket.uStats = { total: 0, encrypted: 0, unencrypted: 0, encryptedPct: 0, protocols: { HTTPS: 0, HTTP: 0, DNS: 0, SSH: 0, TCP: 0, UDP: 0, ICMP: 0, OTHER: 0 }, _lastTotal: 0, pps: 0 };
 
-      // 🚨 ตรวจสอบสิทธิ์ (Role Check)
-      if (clientRole !== 'admin') {
-        // ถ้าเป็นแค่ User ธรรมดา ไม่ว่าจะส่ง Filter อะไรมา Backend จะทิ้งหมด
-        // แล้วบังคับให้ดักจับแค่ IP ของเครื่องตัวเองเท่านั้น
-        finalFilter = `host ${clientIP}`;
-        console.log(`🔒 [USER] ${clientUsername} ขอเริ่มดักจับ -> บังคับ Filter เป็น: "${finalFilter}"`);
-      } else {
-        // ถ้าเป็น Admin อนุญาตให้ใช้ Filter ที่ส่งมาจากหน้าเว็บได้เลย (เพื่อดักของทุกคนหรือกรองแบบอิสระ)
-        console.log(`🔓 [ADMIN] ${clientUsername} ขอเริ่มดักจับ -> ใช้ Filter: "${finalFilter || 'ทั้งหมด'}"`);
+      // สั่ง Tshark เริ่มทำงานแบบ Global (ถ้ายังไม่รัน)
+      if (!packetCapture.isCapturing()) {
+        packetCapture.start(iface, (pkt) => handleData(pkt));
       }
-
-      try {
-        packetCapture.start(iface, finalFilter, io);
-        io.emit('capture:status', { capturing: true, interface: iface });
-      } catch (err) {
-        socket.emit('error', { message: err.message });
-      }
+      socket.emit('capture:status', { capturing: true, interface: iface });
     });
 
     socket.on('capture:stop', () => {
-      console.log('⏹  capture:stop');
-      packetCapture.stop();
-      io.emit('capture:status', { capturing: false });
+      socket.isCapturingData = false;
+      socket.emit('capture:status', { capturing: false });
+
+      const anyoneLeft = Array.from(io.sockets.sockets.values()).some(s => s.isCapturingData);
+      if (!anyoneLeft) packetCapture.stop();
     });
 
-    socket.on('stats:request', () => {
-      socket.emit('stats', buildStats(packetCapture));
-    });
-
-    socket.on('ping', (data) => {
-      socket.emit('pong', { ...data, serverTime: Date.now() });
-    });
-
-    socket.on('disconnect', (reason) => {
-      connectionCount = Math.max(0, connectionCount - 1);
-      console.log(`❌ Client ตัดการเชื่อมต่อ: ${socket.id} (${reason}) — เหลือ ${connectionCount} connections`);
-    });
-
-    socket.on('error', (err) => {
-      console.error(`⚠️  Socket error (${socket.id}):`, err.message);
+    socket.on('disconnect', () => {
+      const anyoneLeft = Array.from(io.sockets.sockets.values()).some(s => s.isCapturingData);
+      if (!anyoneLeft) packetCapture.stop();
     });
   });
 
+  // 🟢 หัวใจสำคัญ: ส่งสถิติ (Stats) ไปให้ Dashboard/Graph ทุก 1 วินาที
   setInterval(() => {
-    if (connectionCount > 0) console.log(`📊 Active connections: ${connectionCount}`);
-  }, 30000);
-};
+    io.sockets.sockets.forEach((socket) => {
+      if (socket.isCapturingData) {
+        if (socket.uStats.total > 0) {
+          socket.uStats.encryptedPct = Math.round((socket.uStats.encrypted / socket.uStats.total) * 100);
+        }
+        // คำนวณ Packets per second (PPS) สำหรับกราฟเส้น
+        socket.uStats.pps = socket.uStats.total - socket.uStats._lastTotal;
+        socket.uStats._lastTotal = socket.uStats.total;
 
-function buildStats(packetCapture) {
-  const s = packetCapture.getStats();
-  return {
-    total: s.total,
-    encrypted: s.encrypted,
-    unencrypted: s.unencrypted,
-    encryptedPct: s.total > 0 ? Math.round((s.encrypted / s.total) * 100) : 0,
-    protocols: s.protocols || {},
-    uptime: s.startTime ? Math.round((Date.now() - s.startTime) / 1000) : 0
-  };
-}
+        // 🟢 ส่ง Event 'stats' พร้อมข้อมูลที่หน้าเว็บคุณรอรับอยู่
+        socket.emit('stats', socket.uStats);
+      }
+    });
+  }, 1000);
+};
