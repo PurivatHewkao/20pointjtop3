@@ -644,7 +644,51 @@ tbody tr:hover td {
   opacity: 0.85;
 }
 
-/* ── Packet Detail Modal ── */
+/* ── Pagination ── */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 16px;
+  padding: 8px 0;
+}
+
+.page-btn {
+  background: var(--white);
+  border: 1px solid var(--border-mid);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all .15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: var(--blue-50);
+  border-color: var(--blue-300);
+  color: var(--blue-700);
+}
+
+.page-btn.active {
+  background: var(--blue-600);
+  color: #fff;
+  border-color: var(--blue-600);
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(37,99,235,0.25);
+}
+
+.page-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 #pkt-detail-overlay {
   display: none;
   position: fixed;
@@ -1020,6 +1064,7 @@ tbody tr:hover td {
       </thead>
       <tbody id="packet-table"></tbody>
     </table>
+    <div id="pagination-container"></div>
   </div>
 
   <!-- Packet Detail Modal -->
@@ -1059,6 +1104,10 @@ tbody tr:hover td {
   let captureStarting = false;  // Prevent double-click
   const MAX_ROWS = 20;
   const MAX_ALERTS = 10;
+
+  // ── Pagination ──
+  let currentPage = 1;
+  const itemsPerPage = 20;  // 20 items per page = max 10 pages for 200 packets
 
   // ── Alert tracking ──
   const alertedKeys = new Set();       // dedup: ไม่ให้ alert ซ้ำคู่เดิม
@@ -1160,6 +1209,7 @@ tbody tr:hover td {
     };
     alertLog = [entry, ...alertLog].slice(0, MAX_ALERTS);
     renderAlerts();
+    // Don't reset currentPage when adding alerts, just re-render current page
     renderTable();
   }
 
@@ -1204,7 +1254,15 @@ tbody tr:hover td {
         (p.tlsVersion || '').toLowerCase().includes(q)
       );
     }
-    tbody.innerHTML = filtered.slice(0, MAX_ROWS).map(p => {
+
+    // ── Pagination ──
+    const totalItems = filtered.length;
+    const totalPages = Math.ceil(totalItems / itemsPerPage);
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    const pageItems = filtered.slice(startIndex, endIndex);
+
+    tbody.innerHTML = pageItems.map(p => {
       const pktAlert = alertLog.find(a => a.pktId === p.id);
       const alertCell = pktAlert
         ? `<span class="pill pill-alert-${pktAlert.type}">${pktAlert.message.slice(0,22)}</span>`
@@ -1223,7 +1281,69 @@ tbody tr:hover td {
         <td>${alertCell}</td>
       </tr>`;
     }).join('');
+
+    // ── Render pagination ──
+    renderPagination(totalPages);
+
     lucide.createIcons();
+  }
+
+  // ── Pagination Functions ──
+  function renderPagination(totalPages) {
+    const paginationContainer = document.getElementById('pagination-container');
+    if (!paginationContainer) return;
+
+    if (totalPages <= 1) {
+      paginationContainer.innerHTML = '';
+      return;
+    }
+
+    // Limit to max 10 pages
+    const maxPages = Math.min(totalPages, 10);
+    const startPage = Math.max(1, currentPage - 4);
+    const endPage = Math.min(maxPages, startPage + 9);
+
+    let paginationHTML = '<div class="pagination">';
+
+    // Previous button
+    paginationHTML += `<button class="page-btn" onclick="changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>
+      <i data-lucide="chevron-left" style="width:14px;height:14px;"></i>
+    </button>`;
+
+    // Page numbers
+    for (let i = startPage; i <= endPage; i++) {
+      paginationHTML += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="changePage(${i})">${i}</button>`;
+    }
+
+    // Next button
+    paginationHTML += `<button class="page-btn" onclick="changePage(${currentPage + 1})" ${currentPage === maxPages ? 'disabled' : ''}>
+      <i data-lucide="chevron-right" style="width:14px;height:14px;"></i>
+    </button>`;
+
+    paginationHTML += '</div>';
+    paginationContainer.innerHTML = paginationHTML;
+  }
+
+  function changePage(page) {
+    const q = (document.getElementById('pkt-search')?.value || '').trim().toLowerCase();
+    let filtered = currentFilter === 'ALL' ? packets : packets.filter(p => p.protocol === currentFilter);
+    if (q) {
+      filtered = filtered.filter(p =>
+        (p.srcIP   || '').toLowerCase().includes(q) ||
+        (p.dstIP   || '').toLowerCase().includes(q) ||
+        (p.protocol|| '').toLowerCase().includes(q) ||
+        String(p.dstPort || '').includes(q)         ||
+        String(p.srcPort || '').includes(q)         ||
+        (p.tlsVersion || '').toLowerCase().includes(q)
+      );
+    }
+
+    const totalPages = Math.min(Math.ceil(filtered.length / itemsPerPage), 10);
+
+    if (page < 1 || page > totalPages) return;
+
+    currentPage = page;
+    renderTable();
   }
 
   function updateMetrics(stats) {
@@ -1305,6 +1425,7 @@ tbody tr:hover td {
     // ── 3. แจ้งเตือนการโจมตี ── [ปานกลาง] ─────────────────────────────
     checkAttackPatterns(pkt, port);
 
+    currentPage = 1;  // Reset to first page to show latest packets
     renderTable();
   }
 
@@ -1474,6 +1595,7 @@ tbody tr:hover td {
 
   function setFilter(f, btn) {
     currentFilter = f;
+    currentPage = 1;  // Reset to first page when changing filter
     document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     renderTable();
