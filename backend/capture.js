@@ -1,5 +1,10 @@
 // capture.js
 const { spawn, exec } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+// เซฟเป็นไฟล์นามสกุล .jsonl (JSON Lines) เพื่อให้เขียนต่อท้ายได้อย่างรวดเร็ว
+const DATA_FILE = path.join(__dirname, 'packet_log.jsonl');
 
 let tshark = null;
 let capturing = false;
