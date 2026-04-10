@@ -1,5 +1,5 @@
 // ── Config ────────────────────────────────────────────────────────────────────
-const socket = io('http://localhost:3000');
+const socket = io('http://localhost:3000/login.html');
 
 const username = sessionStorage.getItem('username') || 'guest';
 const role     = sessionStorage.getItem('role')     || 'user';

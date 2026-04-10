@@ -73,17 +73,18 @@ async function handleAuth(event, action, loginType = null) {
 
         if (data.success) {
             showPopup('success', 'สำเร็จ!', data.message);
-            event.target.reset();
 
+            // ย้ายการ reset ฟอร์มออกไปจัดการแยกกัน
             if (action === 'register' || action === 'reset') {
+                event.target.reset(); // รีเซ็ตเฉพาะตอนสมัครหรือเปลี่ยนรหัสผ่าน
                 setTimeout(() => switchTab('user-login'), 1500);
             } else if (action === 'login') {
-                // บันทึกชื่อผู้ใช้และบทบาทลงใน Session Storage
-                const usernameInput = loginType === 'admin' ? 'admin-username' : 'user-username';
-                sessionStorage.setItem('username', document.getElementById(usernameInput).value);
+                // ✅ ใช้ค่า username จากตัวแปร payload ที่เราเก็บไว้ตั้งแต่แรก
+                sessionStorage.setItem('username', payload.username);
                 sessionStorage.setItem('role', loginType);
 
-                // หน่วงเวลา 1.5 วินาทีเพื่อให้ผู้ใช้เห็น Popup ก่อนเปลี่ยนหน้าไป index.html
+                event.target.reset(); // รีเซ็ตฟอร์มทีหลังสุดเมื่อเก็บข้อมูลเสร็จแล้ว
+
                 setTimeout(() => {
                     window.location.href = 'index.html';
                 }, 1500);

@@ -67,14 +67,13 @@ function isEncryptedPort(srcPort, dstPort) {
   const src = toPort(srcPort);
   const dst = toPort(dstPort);
   return (src && (ENCRYPTED_PORTS.has(src) || SSH_PORTS.has(src))) ||
-         (dst && (ENCRYPTED_PORTS.has(dst) || SSH_PORTS.has(dst)));
+    (dst && (ENCRYPTED_PORTS.has(dst) || SSH_PORTS.has(dst)));
 }
 
 function normalizeProtocol(proto, srcPort, dstPort, tlsVer) {
   const p = proto ? proto.toUpperCase() : '';
   const src = toPort(srcPort);
   const dst = toPort(dstPort);
-
   if (tlsVer && tlsVer !== '') return 'HTTPS';
   if (src === 443 || dst === 443) return 'HTTPS';
   if (src === 22 || dst === 22) return 'SSH';
@@ -136,14 +135,11 @@ function resetStats() {
 
 function emitPacket(io, pkt) {
   if (!pkt || !io) return;
-
   stats.total += 1;
   if (pkt.encrypted) stats.encrypted += 1;
   else stats.unencrypted += 1;
-
   if (stats.protocols[pkt.protocol] !== undefined) stats.protocols[pkt.protocol] += 1;
   else stats.protocols.OTHER += 1;
-
   io.emit('packet', pkt);
   if (stats.total % 50 === 0) emitStats(io);
 
@@ -161,7 +157,6 @@ function emitPacket(io, pkt) {
 function parseLine(line) {
   const [src, dst, tcpSrc, tcpDst, udpSrc, udpDst, proto, tlsVer, len] = line.split('\t');
   if (!src || !dst) return null;
-
   const srcPort = tcpSrc || udpSrc || '-';
   const dstPort = tcpDst || udpDst || '-';
   const protocol = normalizeProtocol(proto, srcPort, dstPort, tlsVer);
@@ -250,7 +245,6 @@ function startTshark(io, iface = '5', filter = '') {
 
 function stopTshark() {
   capturing = false;
-
   if (tshark) {
     console.log('🔪 Killing tshark process...');
     tshark.kill('SIGTERM');
@@ -275,7 +269,10 @@ module.exports = {
   start(iface = '5', filter = '', io) {
     if (capturing) {
       stopTshark();
-      setTimeout(() => { resetStats(); startTshark(io, iface, filter); }, 500);
+      setTimeout(() => {
+        resetStats();
+        startTshark(io, iface, filter);
+      }, 500);
     } else {
       resetStats();
       startTshark(io, iface, filter);
