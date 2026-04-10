@@ -23,7 +23,7 @@ exports.register = (req, res) => {
     let users = getUsers();
 
     if (users.find(u => u.username === username)) {
-        return res.status(400).json({ success: false, message: 'Username นี้มีคนใช้แล้วค่ะ' });
+        return res.status(400).json({ success: false, message: 'Username นี้มีคนใช้แล้ว' });
     }
 
     const role = users.length === 0 ? 'admin' : 'user';
